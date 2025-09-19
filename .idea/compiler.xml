@@ -7,6 +7,7 @@
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <module name="WeChatFileExtract" />
+        <module name="weChat-file-extract" />
       </profile>
     </annotationProcessing>
   </component>
