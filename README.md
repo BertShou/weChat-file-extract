@@ -1,76 +1,63 @@
 ## WeChat File Extract
 
-一个用于整理与去重微信文件的命令行工具：
-- 按文件类型（PDF/IMG/AUDIO/ZIP/GIF/DOC/XLSX/PPT/TEXT/OTHER）分类收集源目录下的所有文件
-- 将文件复制到目标目录的对应子目录中（例如: dst/PDF, dst/IMG ...）
-- 去重规则：若目标目录已存在“去重键”相同的文件（忽略文件名末尾的 (数字)/(中文括号数字) 后缀），则跳过复制
-- 支持清理重复命名的冗余文件，并将被删除的文件先备份到指定目录
+用于核对和归档微信接收的文件：
+
+- `scan` 按 SHA-256 对比源目录与归档目录，只生成报告，不修改文件。
+- `process` 按文件名去重键选择最新版本，备份并验证旧版本后再删除。
+- 最新文件按扩展名归入 PDF、IMG、AUDIO、ZIP、GIF、DOC、XLSX、PPT、TEXT 或 OTHER 子目录。
 
 ### 环境要求
+
 - JDK 21
 - Maven 3.6+
 
 ### 构建
+
 ```bash
 mvn -q -DskipTests package
 ```
+
 构建完成后会在 `target/` 目录下生成可运行的 fat-jar：`fileExtract-jar-with-dependencies.jar`。
 
 ### 使用
-1) 文件抽取与分类复制
+
+0) 只读核对已有归档
+
 ```bash
-java -jar target/fileExtract-jar-with-dependencies.jar "<源目录绝对路径>" "<目标目录绝对路径>"
+java -jar target/fileExtract-jar-with-dependencies.jar scan "<源目录绝对路径>" "<归档目录绝对路径>"
 ```
-示例（Windows PowerShell）：
+
+默认将 CSV 清单写入 `target/wechat-file-scan.csv`。扫描按 SHA-256 标记已归档文件；同名但内容不同的文件会标记为冲突。该命令不会移动、复制或删除源文件和归档文件。也可以添加第三个参数指定报告路径。
+
+需要扫描多个源目录时，可重复使用 `--source`：
+
 ```bash
-java -jar target/fileExtract-jar-with-dependencies.jar "C:\WeChat Files\<wxid>\FileStorage\File" "C:\other_info\wechat_archived_file"
+java -jar target/fileExtract-jar-with-dependencies.jar scan --source "<源目录1>" --source "<源目录2>" --archive "<归档目录>" --report "target\wechat-file-scan.csv"
 ```
 
-运行后效果：
-- 从源目录递归扫描所有文件
-- 按扩展名识别类型并汇总
-- 去重（忽略文件名末尾的 (数字)/(中文括号数字) 后缀）
-- 复制到目标目录下对应类型的子目录
+需要处理待归档文件时：
 
-2) 清理重复文件（备份后删除）
-
-该能力通过代码方法提供：`FileExtract.cleanDuplicatedFiles(cleanFilePath, deleteFildBackPath)`。
-
-你可以直接运行测试用例（推荐先备份重要数据）：
 ```bash
-mvn -q -Dtest=extract.FileExtractTest#testCleanDuplicatedFiles test
-```
-或在你自己的代码中调用：
-```java
-FileExtract.cleanDuplicatedFiles("<需要清理的目录>", "<删除文件的备份目录>");
+java -jar target/fileExtract-jar-with-dependencies.jar process "<源目录>" "<归档目录>" "<重复文件备份目录>" ["<处理报告CSV路径>"]
 ```
 
-清理规则（默认开启大小写不敏感匹配）：
-- 匹配形如：`文件名(1).ext`、`文件名（2）.ext` 的重复命名文件
-- 若同目录下存在对应的原始文件 `文件名.ext`，则视当前文件为重复，会先备份再删除
+按去重键分组（忽略大小写及末尾的 `(数字)`/`（数字）），保留最后修改时间最新的版本；旧版本先备份并校验哈希，再删除源文件或较旧的归档副本。默认报告写入 `
+target/wechat-file-process.csv`。若最新时间相同但内容不同，处理会停止，不会删除文件。
 
- 3) 移动“无意义文件名”的文件到 unknown 目录
+#### 当前微信文件工作流
 
-  规则：仅当“文件基名”（不含扩展名）满足以下条件才会被移动：
-  - 只包含小写字母、数字、下划线
-  - 长度 >= 16
-  - 同时包含字母与数字
-  - 自动排除 .gif 文件
-  示例：`291a038e14de4c06c33284b7ee17d565_34f3d76c3f17aa4b62171afabb175d01_8.xlsx`
+- 当前新文件源目录使用 `C:\xwechat_files\<account>\msg\file`；不要扫描整个 `C:\xwechat_files` 根目录。
+- `msg\attach` 中的 `.dat` 附件和 `msg\video` 不在当前归档范围内。
+- 旧目录 `C:\WeChat Files\<wxid>\FileStorage\File` 已清理；后续只需扫描新的 `msg\file` 目录。
 
-  通过测试执行（示例）：
-  ```bash
-  mvn -q -Dtest=extract.FileExtractTest#testMoveUnknownNamedFiles test
-  ```
+推荐流程：
 
-  在你的代码中调用：
-  ```java
-  FileExtract.moveUnknownNamedFiles("<需要扫描的目录>", "<unknown 目录>");
-  ```
-
-  注意：程序会自动跳过 unknown 目录自身并避免重复移动；若 unknown 目录下已存在同名文件，将自动以 (n) 结尾重命名以避免覆盖。
+1. 运行 `scan`，只读生成 CSV。`ALREADY_ARCHIVED` 表示归档中存在哈希一致的文件；`NAME_CONFLICT` 和 `NOT_ARCHIVED` 是待处理项。
+2. 检查扫描报告后，运行 `process`。该命令按文件最后修改时间（UTC）选择最新版本，将旧版本备份并校验哈希，确认归档副本后删除源文件；必要时也会移除较旧的归档副本及空父目录。
+3. 若同一去重键下最新时间并列且内容不同，`process` 会停止并保留文件，需人工判断。复制、备份、校验或删除失败也会显式报错。
 
 ### 文件类型识别
+
 - PDF: .pdf
 - IMG: .png .jpg
 - AUDIO: .mp3 .mp4 .wav .m4a .wma
@@ -83,15 +70,11 @@ FileExtract.cleanDuplicatedFiles("<需要清理的目录>", "<删除文件的备
 - OTHER: 其它未覆盖后缀或无后缀文件
 
 ### 注意事项
-- 强烈建议在执行任何“清理/删除”操作前做好数据备份
-- Windows 路径包含空格时请使用引号包裹
-- 去重仅以“文件名完全一致”为准，不做内容哈希比对
-- 复制阶段的去重在“类型内”进行（同类型同名文件会被跳过）
- - 清理重复文件时：程序会自动排除备份目录内的文件，并保护性跳过位于备份目录下的任何文件，避免误删
- - 建议将备份目录设置为清理目录之外的路径（不要嵌套在需要清理的目录中）
- - 移动 unknown 文件时会忽略 .gif 文件
+
+- Windows 路径包含空格时请使用引号包裹。
+- `process` 会先完成备份和 SHA-256 校验，再删除源文件；源目录根目录保留，只清理空的子目录。
+- 扫描与处理报告均使用带 UTF-8 BOM 的 CSV，可直接用 Excel 打开。
 
 ### 许可证
+
 本项目仅供学习与个人使用，请在遵守相关法律与使用条款的前提下使用。
-
-
